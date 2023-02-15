@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	neturl "net/url"
+	"net/url"
 	"sync"
 	"time"
 
@@ -37,8 +37,8 @@ var (
 
 // We can't handle LDAP certificates, so this checks to see if the
 // URL string points to an LDAP resource so that we can ignore it.
-func ldapURL(url string) bool {
-	u, err := neturl.Parse(url)
+func ldapURL(uri string) bool {
+	u, err := url.Parse(uri)
 	if err != nil {
 		return false
 	}
@@ -277,7 +277,7 @@ func sendOCSPRequest(server string, req []byte, leaf, issuer *x509.Certificate) 
 		buf := bytes.NewBuffer(req)
 		resp, err = HTTPClient.Post(server, "application/ocsp-request", buf)
 	} else {
-		reqURL := server + "/" + neturl.QueryEscape(base64.StdEncoding.EncodeToString(req))
+		reqURL := server + "/" + url.QueryEscape(base64.StdEncoding.EncodeToString(req))
 		resp, err = HTTPClient.Get(reqURL)
 	}
 
