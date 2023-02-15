@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
@@ -31,8 +30,10 @@ var HardFail = false
 
 // CRLSet associates a PKIX certificate list with the URL the CRL is
 // fetched from.
-var CRLSet = map[string]*pkix.CertificateList{}
-var crlLock = new(sync.Mutex)
+var (
+	CRLSet  = map[string]*x509.RevocationList{}
+	crlLock = new(sync.Mutex)
+)
 
 // We can't handle LDAP certificates, so this checks to see if the
 // URL string points to an LDAP resource so that we can ignore it.
@@ -91,11 +92,12 @@ func revCheck(cert *x509.Certificate) (revoked, ok bool, err error) {
 }
 
 // fetchCRL fetches and parses a CRL.
-func fetchCRL(url string) (*pkix.CertificateList, error) {
+func fetchCRL(url string) (*x509.RevocationList, error) {
 	resp, err := HTTPClient.Get(url)
 	if err != nil {
 		return nil, err
 	}
+
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
@@ -106,7 +108,8 @@ func fetchCRL(url string) (*pkix.CertificateList, error) {
 	if err != nil {
 		return nil, err
 	}
-	return x509.ParseCRL(body)
+
+	return x509.ParseRevocationList(body)
 }
 
 func getIssuer(cert *x509.Certificate) *x509.Certificate {
@@ -129,15 +132,19 @@ func getIssuer(cert *x509.Certificate) *x509.Certificate {
 func certIsRevokedCRL(cert *x509.Certificate, url string) (revoked, ok bool, err error) {
 	crlLock.Lock()
 	crl, ok := CRLSet[url]
+
 	if ok && crl == nil {
 		ok = false
+
 		delete(CRLSet, url)
 	}
+
 	crlLock.Unlock()
 
 	var shouldFetchCRL = true
+
 	if ok {
-		if !crl.HasExpired(time.Now()) {
+		if time.Now().Before(crl.NextUpdate) {
 			shouldFetchCRL = false
 		}
 	}
@@ -145,16 +152,13 @@ func certIsRevokedCRL(cert *x509.Certificate, url string) (revoked, ok bool, err
 	issuer := getIssuer(cert)
 
 	if shouldFetchCRL {
-		var err error
-		crl, err = fetchCRL(url)
-		if err != nil {
+		if crl, err = fetchCRL(url); err != nil {
 			return false, false, err
 		}
 
 		// check CRL signature
 		if issuer != nil {
-			err = issuer.CheckCRLSignature(crl)
-			if err != nil {
+			if err = crl.CheckSignatureFrom(issuer); err != nil {
 				return false, false, err
 			}
 		}
@@ -164,8 +168,8 @@ func certIsRevokedCRL(cert *x509.Certificate, url string) (revoked, ok bool, err
 		crlLock.Unlock()
 	}
 
-	for _, revoked := range crl.TBSCertList.RevokedCertificates {
-		if cert.SerialNumber.Cmp(revoked.SerialNumber) == 0 {
+	for _, rcert := range crl.RevokedCertificates {
+		if cert.SerialNumber.Cmp(rcert.SerialNumber) == 0 {
 			return true, true, err
 		}
 	}
@@ -177,6 +181,7 @@ func certIsRevokedCRL(cert *x509.Certificate, url string) (revoked, ok bool, err
 // expired and checks the CRL for the server.
 func VerifyCertificate(cert *x509.Certificate) (revoked, ok bool) {
 	revoked, ok, _ = VerifyCertificateError(cert)
+
 	return revoked, ok
 }
 
@@ -185,11 +190,14 @@ func VerifyCertificate(cert *x509.Certificate) (revoked, ok bool) {
 func VerifyCertificateError(cert *x509.Certificate) (revoked, ok bool, err error) {
 	if !time.Now().Before(cert.NotAfter) {
 		msg := fmt.Sprintf("Certificate expired %s\n", cert.NotAfter)
+
 		return true, true, fmt.Errorf(msg)
 	} else if !time.Now().After(cert.NotBefore) {
 		msg := fmt.Sprintf("Certificate isn't valid until %s\n", cert.NotBefore)
+
 		return true, true, fmt.Errorf(msg)
 	}
+
 	return revCheck(cert)
 }
 
@@ -198,6 +206,7 @@ func fetchRemote(url string) (*x509.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	defer resp.Body.Close()
 
 	in, err := remoteRead(resp.Body)
@@ -205,8 +214,7 @@ func fetchRemote(url string) (*x509.Certificate, error) {
 		return nil, err
 	}
 
-	p, _ := pem.Decode(in)
-	if p != nil {
+	if p, _ := pem.Decode(in); p != nil {
 		return ParseCertificatePEM(in)
 	}
 
@@ -262,9 +270,9 @@ func certIsRevokedOCSP(leaf *x509.Certificate, strict bool) (revoked, ok bool, e
 // sendOCSPRequest attempts to request an OCSP response from the
 // server. The error only indicates a failure to *fetch* the
 // certificate, and *does not* mean the certificate is valid.
-func sendOCSPRequest(server string, req []byte, leaf, issuer *x509.Certificate) (*ocsp.Response, error) {
+func sendOCSPRequest(server string, req []byte, leaf, issuer *x509.Certificate) (r *ocsp.Response, err error) {
 	var resp *http.Response
-	var err error
+
 	if len(req) > 256 {
 		buf := bytes.NewBuffer(req)
 		resp, err = HTTPClient.Post(server, "application/ocsp-request", buf)
@@ -276,6 +284,7 @@ func sendOCSPRequest(server string, req []byte, leaf, issuer *x509.Certificate) 
 	if err != nil {
 		return nil, err
 	}
+
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
