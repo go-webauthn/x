@@ -3,6 +3,7 @@ package revoke
 import (
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -435,3 +436,7 @@ func WrapError(category Category, reason Reason, err error) *Error {
 	return &Error{ErrorCode: errorCode, Message: err.Error()}
 
 }
+
+var (
+	ErrFailedGetCRL = errors.New("failed to retrieve CRL")
+)

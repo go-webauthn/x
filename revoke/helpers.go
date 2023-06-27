@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"net/url"
 )
 
 // ParseCertificatePEM parses and returns a PEM-encoded certificate,
@@ -30,7 +31,6 @@ func ParseCertificatePEM(certPEM []byte) (*x509.Certificate, error) {
 // multiple certificates, from the top of certsPEM, which itself may
 // contain multiple PEM encoded certificate objects.
 func ParseOneCertificateFromPEM(certsPEM []byte) ([]*x509.Certificate, []byte, error) {
-
 	block, rest := pem.Decode(certsPEM)
 	if block == nil {
 		return nil, rest, nil
@@ -53,4 +53,19 @@ func ParseOneCertificateFromPEM(certsPEM []byte) ([]*x509.Certificate, []byte, e
 	}
 	var certs = []*x509.Certificate{cert}
 	return certs, rest, nil
+}
+
+// We can't handle LDAP certificates, so this checks to see if the
+// URL string points to an LDAP resource so that we can ignore it.
+func ldapURL(uri string) bool {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return false
+	}
+
+	if u.Scheme == "ldap" {
+		return true
+	}
+
+	return false
 }
