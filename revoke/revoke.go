@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ocsp"
@@ -32,12 +33,12 @@ import (
 //	true, false:  failure to check revocation status causes
 //	                verification to fail
 func revCheck(cert *x509.Certificate) (revoked, ok bool, err error) {
-	for _, url := range cert.CRLDistributionPoints {
-		if ldapURL(url) {
+	for _, uri := range cert.CRLDistributionPoints {
+		if ldapURL(uri) {
 			continue
 		}
 
-		if revoked, ok, err := certIsRevokedCRL(cert, url); !ok {
+		if revoked, ok, err = certIsRevokedCRL(cert, uri); !ok {
 			if HardFail {
 				return true, false, err
 			}
@@ -47,10 +48,11 @@ func revCheck(cert *x509.Certificate) (revoked, ok bool, err error) {
 		}
 	}
 
-	if revoked, ok, err := certIsRevokedOCSP(cert, HardFail); !ok {
+	if revoked, ok, err = certIsRevokedOCSP(cert, HardFail); !ok {
 		if HardFail {
 			return true, false, err
 		}
+
 		return false, false, err
 	} else if revoked {
 		return true, true, err
@@ -59,11 +61,14 @@ func revCheck(cert *x509.Certificate) (revoked, ok bool, err error) {
 	return false, true, nil
 }
 
-func getIssuer(cert *x509.Certificate) *x509.Certificate {
-	var issuer *x509.Certificate
-	var err error
-	for _, issuingCert := range cert.IssuingCertificateURL {
-		issuer, err = fetchRemote(issuingCert)
+func getIssuer(cert *x509.Certificate) (issuer *x509.Certificate) {
+	var (
+		uri string
+		err error
+	)
+
+	for _, uri = range cert.IssuingCertificateURL {
+		issuer, err = fetchRemote(uri)
 		if err != nil {
 			continue
 		}
@@ -71,13 +76,13 @@ func getIssuer(cert *x509.Certificate) *x509.Certificate {
 	}
 
 	return issuer
-
 }
 
 // VerifyCertificate ensures that the certificate passed in hasn't
 // expired and checks the CRL for the server.
 func VerifyCertificate(cert *x509.Certificate) (revoked, ok bool) {
 	revoked, ok, _ = VerifyCertificateError(cert)
+
 	return revoked, ok
 }
 
@@ -85,11 +90,9 @@ func VerifyCertificate(cert *x509.Certificate) (revoked, ok bool) {
 // expired and checks the CRL for the server.
 func VerifyCertificateError(cert *x509.Certificate) (revoked, ok bool, err error) {
 	if !time.Now().Before(cert.NotAfter) {
-		msg := fmt.Sprintf("Certificate expired %s\n", cert.NotAfter)
-		return true, true, fmt.Errorf(msg)
+		return true, true, fmt.Errorf("Certificate expired %s\n", cert.NotAfter)
 	} else if !time.Now().After(cert.NotBefore) {
-		msg := fmt.Sprintf("Certificate isn't valid until %s\n", cert.NotBefore)
-		return true, true, fmt.Errorf(msg)
+		return true, true, fmt.Errorf("Certificate isn't valid until %s\n", cert.NotBefore)
 	}
 	return revCheck(cert)
 }
@@ -217,6 +220,8 @@ var (
 	ocspOpts = ocsp.RequestOptions{
 		Hash: crypto.SHA1,
 	}
+
+	crlLock = new(sync.Mutex)
 )
 
 // SetCRLFetcher sets the function to use to read from the http response body
