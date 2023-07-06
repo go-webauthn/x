@@ -4,15 +4,13 @@ package revoke
 
 import (
 	"crypto/x509"
-	"sync"
 	"time"
 )
 
 // CRLSet associates a PKIX certificate list with the URL the CRL is
 // fetched from.
 var (
-	CRLSet  = map[string]*x509.RevocationList{}
-	crlLock = new(sync.Mutex)
+	CRLSet = map[string]*x509.RevocationList{}
 )
 
 // fetchCRL fetches and parses a CRL.
@@ -39,10 +37,11 @@ func fetchCRL(url string) (*x509.RevocationList, error) {
 // check a cert against a specific CRL. Returns the same bool pair
 // as revCheck, plus an error if one occurred.
 func certIsRevokedCRL(cert *x509.Certificate, url string) (revoked, ok bool, err error) {
-	crlLock.Lock()
-	crl, ok := CRLSet[url]
+	var crl *x509.RevocationList
 
-	if ok && crl == nil {
+	crlLock.Lock()
+
+	if crl, ok = CRLSet[url]; ok && crl == nil {
 		ok = false
 
 		delete(CRLSet, url)
@@ -52,10 +51,8 @@ func certIsRevokedCRL(cert *x509.Certificate, url string) (revoked, ok bool, err
 
 	var shouldFetchCRL = true
 
-	if ok {
-		if time.Now().Before(crl.NextUpdate) {
-			shouldFetchCRL = false
-		}
+	if ok && time.Now().Before(crl.NextUpdate) {
+		shouldFetchCRL = false
 	}
 
 	issuer := getIssuer(cert)
@@ -65,7 +62,7 @@ func certIsRevokedCRL(cert *x509.Certificate, url string) (revoked, ok bool, err
 			return false, false, err
 		}
 
-		// check CRL signature
+		// Check the CRL signature.
 		if issuer != nil {
 			if err = crl.CheckSignatureFrom(issuer); err != nil {
 				return false, false, err

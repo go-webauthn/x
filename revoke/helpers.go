@@ -23,6 +23,7 @@ func ParseCertificatePEM(certPEM []byte) (*x509.Certificate, error) {
 	} else if len(cert) > 1 {
 		return nil, WrapError(CertificateError, ParseFailed, errors.New("the PKCS7 object in the PEM file should contain only one certificate"))
 	}
+
 	return cert[0], nil
 }
 
@@ -38,21 +39,25 @@ func ParseOneCertificateFromPEM(certsPEM []byte) ([]*x509.Certificate, []byte, e
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		pkcs7data, err := ParsePKCS7(block.Bytes)
-		if err != nil {
+		var pkcs7data *PKCS7
+
+		if pkcs7data, err = ParsePKCS7(block.Bytes); err != nil {
 			return nil, rest, err
 		}
+
 		if pkcs7data.ContentInfo != "SignedData" {
 			return nil, rest, errors.New("only PKCS #7 Signed Data Content Info supported for certificate parsing")
 		}
+
 		certs := pkcs7data.Content.SignedData.Certificates
 		if certs == nil {
 			return nil, rest, errors.New("PKCS #7 structure contains no certificates")
 		}
+
 		return certs, rest, nil
 	}
-	var certs = []*x509.Certificate{cert}
-	return certs, rest, nil
+
+	return []*x509.Certificate{cert}, rest, nil
 }
 
 // We can't handle LDAP certificates, so this checks to see if the

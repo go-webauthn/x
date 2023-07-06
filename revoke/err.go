@@ -223,8 +223,7 @@ const (
 	RecordNotFound
 )
 
-// the given category, reason. Currently, to avoid confusion, it is not
-// allowed to create an error of category Success
+// NewError provided the given category, reason, returns an Error.
 func NewError(category Category, reason Reason) *Error {
 	errorCode := int(category) + int(reason)
 	var msg string
@@ -395,6 +394,7 @@ func NewError(category Category, reason Reason) *Error {
 		panic(fmt.Sprintf("Unsupported CFSSL error type: %d.",
 			category))
 	}
+
 	return &Error{ErrorCode: errorCode, Message: msg}
 }
 

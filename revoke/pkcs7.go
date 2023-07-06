@@ -88,14 +88,14 @@ type PKCS7 struct {
 	Content     Content
 }
 
-// Content implements three of the six possible PKCS7 data types.  Only one is non-nil.
+// Content implements three of the six possible PKCS7 data types. Only one is non-nil.
 type Content struct {
 	Data          []byte
 	SignedData    SignedData
 	EncryptedData EncryptedData
 }
 
-// SignedData defines the typical carrier of certificates and crls.
+// SignedData defines the typical carrier of certificates and CRLs.
 type SignedData struct {
 	Raw          asn1.RawContent
 	Version      int
