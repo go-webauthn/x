@@ -75,8 +75,10 @@ func certIsRevokedCRL(cert *x509.Certificate, url string) (revoked, ok bool, err
 		crlLock.Unlock()
 	}
 
-	for _, revoked = range crl.TBSCertList.RevokedCertificates {
-		if cert.SerialNumber.Cmp(revoked.SerialNumber) == 0 {
+	var rc pkix.RevokedCertificate
+
+	for _, rc = range crl.TBSCertList.RevokedCertificates {
+		if cert.SerialNumber.Cmp(rc.SerialNumber) == 0 {
 			return true, true, err
 		}
 	}
