@@ -17,39 +17,61 @@ import (
 	"golang.org/x/crypto/ocsp"
 )
 
-// revCheck should check the certificate for any revocations. It
-// returns a pair of booleans: the first indicates whether the certificate
-// is revoked, the second indicates whether the revocations were
-// successfully checked.. This leads to the following combinations:
-//
-//	false, false: an error was encountered while checking revocations.
-//
-//	false, true:  the certificate was checked successfully and
-//	                it is not revoked.
-//
-//	true, true:   the certificate was checked successfully and
-//	                it is revoked.
-//
-//	true, false:  failure to check revocation status causes
-//	                verification to fail
-func revCheck(cert *x509.Certificate) (revoked, ok bool, err error) {
+func NewVerifier(opts ...VerifierOption) (verifier *Verifier) {
+	verifier = &Verifier{
+		client: &http.Client{},
+		crls:   map[string]*x509.RevocationList{},
+		lock:   &sync.Mutex{},
+		reader: io.ReadAll,
+	}
+
+	for _, opt := range opts {
+		opt(verifier)
+	}
+
+	return verifier
+}
+
+type Verifier struct {
+	client *http.Client
+	crls   map[string]*x509.RevocationList
+	lock   *sync.Mutex
+	strict bool
+
+	reader     Reader
+	readerCRL  Reader
+	readerOCSP Reader
+}
+
+func (v *Verifier) CertificateValid(cert *x509.Certificate) (revoked, ok bool, err error) {
+	if !time.Now().Before(cert.NotAfter) {
+		return true, true, fmt.Errorf("Certificate expired %s\n", cert.NotAfter)
+	} else if !time.Now().After(cert.NotBefore) {
+		return true, true, fmt.Errorf("Certificate isn't valid until %s\n", cert.NotBefore)
+	}
+
+	return v.CertificateRevoked(cert)
+}
+
+func (v *Verifier) CertificateRevoked(cert *x509.Certificate) (revoked, ok bool, err error) {
 	for _, uri := range cert.CRLDistributionPoints {
 		if ldapURL(uri) {
 			continue
 		}
 
-		if revoked, ok, err = certIsRevokedCRL(cert, uri); !ok {
-			if HardFail {
+		if revoked, ok, err = v.CertificateRevokedCRL(cert, uri); !ok {
+			if v.strict {
 				return true, false, err
 			}
+
 			return false, false, err
 		} else if revoked {
 			return true, true, err
 		}
 	}
 
-	if revoked, ok, err = certIsRevokedOCSP(cert, HardFail); !ok {
-		if HardFail {
+	if revoked, ok, err = v.CertificateRevokedOCSP(cert); !ok {
+		if v.strict {
 			return true, false, err
 		}
 
@@ -61,88 +83,79 @@ func revCheck(cert *x509.Certificate) (revoked, ok bool, err error) {
 	return false, true, nil
 }
 
-func getIssuer(cert *x509.Certificate) (issuer *x509.Certificate) {
-	var (
-		uri string
-		err error
-	)
+func (v *Verifier) CertificateRevokedCRL(cert *x509.Certificate, uri string) (revoked, ok bool, err error) {
+	var crl *x509.RevocationList
 
-	for _, uri = range cert.IssuingCertificateURL {
-		issuer, err = fetchRemote(uri)
-		if err != nil {
-			continue
+	v.lock.Lock()
+
+	if crl, ok = v.crls[uri]; ok && crl == nil {
+		ok = false
+
+		delete(v.crls, uri)
+	}
+
+	defer v.lock.Unlock()
+
+	var shouldFetchCRL = true
+
+	if ok && time.Now().Before(crl.NextUpdate) {
+		shouldFetchCRL = false
+	}
+
+	issuer := v.GetIssuer(cert)
+
+	if shouldFetchCRL {
+		if crl, err = v.fetchCRL(uri); err != nil {
+			return false, false, err
 		}
-		break
+
+		// Check the CRL signature.
+		if issuer != nil {
+			if err = crl.CheckSignatureFrom(issuer); err != nil {
+				return false, false, err
+			}
+		}
+
+		v.crls[uri] = crl
 	}
 
-	return issuer
+	for _, rcert := range crl.RevokedCertificateEntries {
+		if cert.SerialNumber.Cmp(rcert.SerialNumber) == 0 {
+			return true, true, err
+		}
+	}
+
+	return false, true, err
 }
 
-// VerifyCertificate ensures that the certificate passed in hasn't
-// expired and checks the CRL for the server.
-func VerifyCertificate(cert *x509.Certificate) (revoked, ok bool) {
-	revoked, ok, _ = VerifyCertificateError(cert)
-
-	return revoked, ok
-}
-
-// VerifyCertificateError ensures that the certificate passed in hasn't
-// expired and checks the CRL for the server.
-func VerifyCertificateError(cert *x509.Certificate) (revoked, ok bool, err error) {
-	if !time.Now().Before(cert.NotAfter) {
-		return true, true, fmt.Errorf("Certificate expired %s\n", cert.NotAfter)
-	} else if !time.Now().After(cert.NotBefore) {
-		return true, true, fmt.Errorf("Certificate isn't valid until %s\n", cert.NotBefore)
-	}
-	return revCheck(cert)
-}
-
-func fetchRemote(url string) (*x509.Certificate, error) {
-	resp, err := HTTPClient.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	in, err := remoteRead(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	p, _ := pem.Decode(in)
-	if p != nil {
-		return ParseCertificatePEM(in)
-	}
-
-	return x509.ParseCertificate(in)
-}
-
-func certIsRevokedOCSP(leaf *x509.Certificate, strict bool) (revoked, ok bool, e error) {
+func (v *Verifier) CertificateRevokedOCSP(cert *x509.Certificate) (revoked, ok bool, e error) {
 	var err error
 
-	ocspURLs := leaf.OCSPServer
+	ocspURLs := cert.OCSPServer
 	if len(ocspURLs) == 0 {
 		// OCSP not enabled for this certificate.
 		return false, true, nil
 	}
 
-	issuer := getIssuer(leaf)
+	issuer := v.GetIssuer(cert)
 
 	if issuer == nil {
 		return false, false, nil
 	}
 
-	ocspRequest, err := ocsp.CreateRequest(leaf, issuer, &ocspOpts)
+	req, err := ocsp.CreateRequest(cert, issuer, &ocspOpts)
 	if err != nil {
 		return revoked, ok, err
 	}
 
+	var resp *ocsp.Response
+
 	for _, server := range ocspURLs {
-		resp, err := sendOCSPRequest(server, ocspRequest, leaf, issuer)
-		if err != nil {
-			if strict {
+		if resp, err = v.fetchOCSP(server, req, cert, issuer); err != nil {
+			if v.strict {
 				return revoked, ok, err
 			}
+
 			continue
 		}
 
@@ -156,21 +169,92 @@ func certIsRevokedOCSP(leaf *x509.Certificate, strict bool) (revoked, ok bool, e
 
 		return revoked, ok, err
 	}
+
 	return revoked, ok, err
 }
 
-// sendOCSPRequest attempts to request an OCSP response from the
-// server. The error only indicates a failure to *fetch* the
-// certificate, and *does not* mean the certificate is valid.
-func sendOCSPRequest(server string, req []byte, leaf, issuer *x509.Certificate) (r *ocsp.Response, err error) {
+func (v *Verifier) GetIssuer(cert *x509.Certificate) (issuer *x509.Certificate) {
+	var (
+		uri string
+		err error
+	)
+
+	for _, uri = range cert.IssuingCertificateURL {
+		if issuer, err = v.fetchCert(uri); err != nil {
+			continue
+		}
+
+		break
+	}
+
+	return issuer
+}
+
+func (v *Verifier) readfunc(r Reader) (reader Reader) {
+	if r != nil {
+		return r
+	}
+
+	return v.reader
+}
+
+func (v *Verifier) fetch(url string, read Reader) (resp *http.Response, body []byte, err error) {
+	if resp, err = v.client.Get(url); err != nil {
+		return nil, nil, err
+	}
+
+	defer resp.Body.Close()
+
+	if body, err = read(resp.Body); err != nil {
+		return nil, nil, err
+	}
+
+	return resp, body, nil
+}
+
+func (v *Verifier) fetchCert(url string) (cert *x509.Certificate, err error) {
+	var (
+		body []byte
+	)
+
+	if _, body, err = v.fetch(url, v.reader); err != nil {
+		return nil, err
+	}
+
+	if p, _ := pem.Decode(body); p != nil {
+		return ParseCertificatePEM(body)
+	}
+
+	return x509.ParseCertificate(body)
+}
+
+// fetchCRL fetches and parses a CRL.
+func (v *Verifier) fetchCRL(url string) (crl *x509.RevocationList, err error) {
+	var (
+		resp *http.Response
+		body []byte
+	)
+
+	if resp, body, err = v.fetch(url, v.readfunc(v.readerCRL)); err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 300 {
+		return nil, ErrFailedGetCRL
+	}
+
+	return x509.ParseRevocationList(body)
+}
+
+func (v *Verifier) fetchOCSP(server string, req []byte, leaf, issuer *x509.Certificate) (r *ocsp.Response, err error) {
 	var resp *http.Response
 
 	if len(req) > 256 {
 		buf := bytes.NewBuffer(req)
-		resp, err = HTTPClient.Post(server, "application/ocsp-request", buf)
+		resp, err = v.client.Post(server, "application/ocsp-request", buf)
 	} else {
 		reqURL := server + "/" + url.QueryEscape(base64.StdEncoding.EncodeToString(req))
-		resp, err = HTTPClient.Get(reqURL)
+		resp, err = v.client.Get(reqURL)
 	}
 
 	if err != nil {
@@ -183,7 +267,7 @@ func sendOCSPRequest(server string, req []byte, leaf, issuer *x509.Certificate) 
 		return nil, errors.New("failed to retrieve OSCP")
 	}
 
-	body, err := ocspRead(resp.Body)
+	body, err := v.readfunc(v.readerOCSP)(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -204,37 +288,42 @@ func sendOCSPRequest(server string, req []byte, leaf, issuer *x509.Certificate) 
 	return ocsp.ParseResponseForCert(body, leaf, issuer)
 }
 
+type VerifierOption func(validator *Verifier)
+
+func WithClient(client *http.Client) VerifierOption {
+	return func(validator *Verifier) {
+		validator.client = client
+	}
+}
+
+func WithStrict() VerifierOption {
+	return func(validator *Verifier) {
+		validator.strict = true
+	}
+}
+
+func WithReader(reader Reader) VerifierOption {
+	return func(validator *Verifier) {
+		validator.reader = reader
+	}
+}
+
+func WithCRLReader(reader Reader) VerifierOption {
+	return func(validator *Verifier) {
+		validator.readerCRL = reader
+	}
+}
+
+func WithOCSPReader(reader Reader) VerifierOption {
+	return func(validator *Verifier) {
+		validator.readerOCSP = reader
+	}
+}
+
+type Reader func(r io.Reader) ([]byte, error)
+
 var (
-	// HTTPClient is an instance of http.Client that will be used for all HTTP requests.
-	HTTPClient = http.DefaultClient
-
-	// HardFail determines whether the failure to check the revocation
-	// status of a certificate (i.e. due to network failure) causes
-	// verification to fail (a hard failure).
-	HardFail = false
-
-	crlRead    = io.ReadAll
-	remoteRead = io.ReadAll
-	ocspRead   = io.ReadAll
-
 	ocspOpts = ocsp.RequestOptions{
 		Hash: crypto.SHA1,
 	}
-
-	crlLock = new(sync.Mutex)
 )
-
-// SetCRLFetcher sets the function to use to read from the http response body
-func SetCRLFetcher(fn func(io.Reader) ([]byte, error)) {
-	crlRead = fn
-}
-
-// SetRemoteFetcher sets the function to use to read from the http response body
-func SetRemoteFetcher(fn func(io.Reader) ([]byte, error)) {
-	remoteRead = fn
-}
-
-// SetOCSPFetcher sets the function to use to read from the http response body
-func SetOCSPFetcher(fn func(io.Reader) ([]byte, error)) {
-	ocspRead = fn
-}
