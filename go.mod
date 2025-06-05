@@ -2,6 +2,6 @@ module github.com/go-webauthn/x
 
 go 1.23.0
 
-toolchain go1.24.3
+toolchain go1.24.4
 
 require golang.org/x/crypto v0.38.0
