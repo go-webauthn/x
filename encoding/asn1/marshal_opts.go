@@ -8,7 +8,7 @@ type marshalOpts struct {
 // MarshalOpt describes a functional option for marshalling.
 type MarshalOpt func(opts *marshalOpts)
 
-// WithMarshalSlicePreserveTypes preserves the type values from the field parameters when unmarshalling slices. This is an
+// WithMarshalSlicePreserveTypes preserves the type values from the field parameters when marshaling slices. This is an
 // option since it deviates from stdlib.
 func WithMarshalSlicePreserveTypes(value bool) MarshalOpt {
 	return func(opts *marshalOpts) {
@@ -16,8 +16,8 @@ func WithMarshalSlicePreserveTypes(value bool) MarshalOpt {
 	}
 }
 
-// WithMarshalSliceAllowStrings allows slices of strings when unmarshalling slices. This is an option since it deviates from
-// stdlib.
+// WithMarshalSliceAllowStrings allows slices of strings when marshaling slices. This is an option since it deviates
+// from stdlib.
 func WithMarshalSliceAllowStrings(value bool) MarshalOpt {
 	return func(opts *marshalOpts) {
 		opts.sliceAllowStrings = value
