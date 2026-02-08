@@ -61,7 +61,7 @@ func TestParseInt64(t *testing.T) {
 		{"ShouldHandleNegative128", []byte{0x80}, true, -128},
 		{"ShouldHandleNegative129", []byte{0xff, 0x7f}, true, -129},
 		{"ShouldHandleNegative1", []byte{0xff}, true, -1},
-		{"ShouldHandleShouldHandleLargeInt64", []byte{0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, true, -9223372036854775808},
+		{"ShouldHandleLargeInt64", []byte{0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, true, -9223372036854775808},
 		{"ShouldNotHandleZeroBytesTrailing", []byte{0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, false, 0},
 		{"ShouldNotHandleEmptyArray", []byte{}, false, 0},
 		{"ShouldNotHandleBERPositiveInt64Leading00", []byte{0x00, 0x7f}, false, 0},
@@ -171,8 +171,10 @@ func TestParseInt32BER(t *testing.T) {
 		{"ShouldHandleNegative2147483648", []byte{0x80, 0x00, 0x00, 0x00}, true, -2147483648},
 		{"ShouldNotHandleZeroBytes", []byte{0x80, 0x00, 0x00, 0x00, 0x00}, false, 0},
 		{"ShouldNotHandleEmptyBytes", []byte{}, false, 0},
-		{"ShouldNotHandleBERInteger", []byte{0x00, 0x7f}, true, 127},
-		{"ShouldNotHandleBERNegativeInteger", []byte{0xff, 0xf0}, true, -16},
+		{"ShouldHandleBERInteger", []byte{0x00, 0x7f}, true, 127},
+		{"ShouldHandleDERInteger", []byte{0x7f}, true, 127},
+		{"ShouldHandleBERNegativeInteger", []byte{0xff, 0xf0}, true, -16},
+		{"ShouldHandleDERNegativeInteger", []byte{0xf0}, true, -16},
 	}
 
 	for _, tc := range testCases {
@@ -1360,7 +1362,7 @@ func TestImplicitTypeRoundtrip(t *testing.T) {
 }
 
 func TestParsingMemoryConsumption(t *testing.T) {
-	// Craft a syntatically valid, but empty, ~10 MB DER bomb. A successful
+	// Craft a syntactically valid, but empty, ~10 MB DER bomb. A successful
 	// unmarshal of this bomb should yield ~280 MB. However, the parsing should
 	// fail due to the empty content; and, in such cases, we want to make sure
 	// that we do not unnecessarily allocate memories.

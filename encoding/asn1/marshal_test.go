@@ -200,7 +200,7 @@ func TestMarshal(t *testing.T) {
 			assert.NoError(t, err)
 
 			out, _ := hex.DecodeString(tc.out)
-			assert.Equal(t, data, out)
+			assert.Equal(t, out, data)
 		})
 	}
 }
