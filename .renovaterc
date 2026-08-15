@@ -17,6 +17,9 @@
     "gomod",
     "github-actions"
   ],
+  "ignorePaths": [
+    "crypto/blake256/internal/_asm/**"
+  ],
   "postUpdateOptions": [
     "gomodTidy",
     "gomodMassage"
