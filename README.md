@@ -10,10 +10,10 @@ diffing the recorded commit against the upstream branch.
 
 | Package                                                                | Upstream                                                                          | Commit base                                | Local changes            |
 |------------------------------------------------------------------------|-----------------------------------------------------------------------------------|--------------------------------------------|--------------------------|
-| [crypto/blake256](crypto/blake256)                                     | [decred/dcrd](https://github.com/decred/dcrd) `crypto/blake256`                   | `c32cc6f5cfc72b2b76a38e43d2a702f17e94d248` | Import path rewrite only |
-| [crypto/blake256/internal/compress](crypto/blake256/internal/compress) | [decred/dcrd](https://github.com/decred/dcrd) `crypto/blake256/internal/compress` | `d11d77828cd7ffb4e90b41f95bbf188f7d180e4a` | None                     |
+| [crypto/blake256](crypto/blake256)                                     | [decred/dcrd](https://github.com/decred/dcrd) `crypto/blake256`                   | `c32cc6f5cfc72b2b76a38e43d2a702f17e94d248` | Import path rewrite; fixes |
+| [crypto/blake256/internal/compress](crypto/blake256/internal/compress) | [decred/dcrd](https://github.com/decred/dcrd) `crypto/blake256/internal/compress` | `d11d77828cd7ffb4e90b41f95bbf188f7d180e4a` | Fixes                      |
 | [crypto/blake256/internal/_asm](crypto/blake256/internal/_asm)         | [decred/dcrd](https://github.com/decred/dcrd) `crypto/blake256/internal/_asm`     | `0d2e94857b109d8bcf1056b3d5061ca90f0f8b94` | Module path rewrite only |
-| [crypto/secp256k1](crypto/secp256k1)                                   | [decred/dcrd](https://github.com/decred/dcrd) `dcrec/secp256k1`                   | `085eb08c6b1e3aec6a201fd5ac45c64a2daf9144` | Import path rewrite only |
+| [crypto/secp256k1](crypto/secp256k1)                                   | [decred/dcrd](https://github.com/decred/dcrd) `dcrec/secp256k1`                   | `085eb08c6b1e3aec6a201fd5ac45c64a2daf9144` | Import path rewrite; fixes |
 | [crypto/secp256k1/ecdsa](crypto/secp256k1/ecdsa)                       | [decred/dcrd](https://github.com/decred/dcrd) `dcrec/secp256k1/ecdsa`             | `085eb08c6b1e3aec6a201fd5ac45c64a2daf9144` | Import path rewrite only |
 | [encoding/asn1](encoding/asn1)                                         | [golang/go](https://github.com/golang/go) `src/encoding/asn1`                     | `3e43f48cb6311c3c459f5c7aa69ae7d28b7fc821` | Substantial              |
 | [revoke](revoke)                                                       | [cloudflare/cfssl](https://github.com/cloudflare/cfssl)                           | `e6502bb7ffe4ee576227c9123a101deda248884c` | Substantial              |
@@ -21,14 +21,31 @@ diffing the recorded commit against the upstream branch.
 Each commit base is the most recent upstream commit to touch that path as of the fork, so a base older than the fork
 itself simply means upstream had not modified those files since.
 
+### Local fixes to the dcrd forks
+
+These are the only changes to the `decred/dcrd` sources beyond the import path rewrites. They are not carried upstream,
+so they must be reapplied on a resync. `crypto/blake256/fork_test.go` has no upstream counterpart and covers the first
+two.
+
+| Location                                  | Change                                                                                                                             |
+|-------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
+| `blake256/hasher.go` `write`              | Compute the partial block guard in 64-bit arithmetic. A single write of 4 GiB truncated to `uint32`, skipped the pending block, and produced a wrong hash. |
+| `blake256/hasher.go` `loadState`          | Reject a serialized state whose buffered byte count is not less than `BlockSize`, and decode into a local value so a rejected state cannot partially overwrite the receiver. Previously such a state panicked on the next write. |
+| `blake256/internal/compress`              | Enforce the documented minimum message length in both `Blocks` implementations. The `amd64` assembly does not bounds check, so only the pure Go path panicked as documented. |
+| `blake256/internal/compress/cpu_amd64.s`  | Declare `supportsCPUID` as `$8-1` rather than `$8-4`; a `bool` result is one byte, and `go vet` rejects the mismatch on `amd64`.     |
+| `secp256k1/doc.go`                        | Drop the references to the excluded `schnorr` subpackage and to per package `README.md` files, neither of which exist in this fork. |
+| `secp256k1/pubkey.go`                     | Document the hybrid format bytes as `0x06`/`0x07` to match `PubKeyFormatHybridEven` and `PubKeyFormatHybridOdd`; the comment said `0x05`/`0x06`. |
+| `secp256k1/error.go`                      | Spell the curve `secp256k1` in the `Error` doc comment.                                                                            |
+
 ### crypto/secp256k1
 
 Provides the secp256k1 curve used by the COSE `ES256K` algorithm and `secp256k1` elliptic curve identifiers.
 
 The `schnorr` subpackage, which implements EC-Schnorr-DCRv0, a signature scheme specific to Decred, is not included as
-it has no WebAuthn use. The commit base covers both this package and its `ecdsa` subpackage. Sources are unmodified
-apart from rewriting `github.com/decred/dcrd/dcrec/secp256k1/v4` to `github.com/go-webauthn/x/crypto/secp256k1` and
-`github.com/decred/dcrd/crypto/blake256` to `github.com/go-webauthn/x/crypto/blake256`.
+it has no WebAuthn use. The commit base covers both this package and its `ecdsa` subpackage. Beyond the local fixes
+listed below, sources are unmodified apart from rewriting `github.com/decred/dcrd/dcrec/secp256k1/v4` to
+`github.com/go-webauthn/x/crypto/secp256k1` and `github.com/decred/dcrd/crypto/blake256` to
+`github.com/go-webauthn/x/crypto/blake256`.
 
 ```bash
 git log --oneline 085eb08c6b1e3aec6a201fd5ac45c64a2daf9144..master -- dcrec/secp256k1
@@ -37,8 +54,9 @@ git log --oneline 085eb08c6b1e3aec6a201fd5ac45c64a2daf9144..master -- dcrec/secp
 ### crypto/blake256
 
 The `ecdsa` test vectors of `crypto/secp256k1` are computed over BLAKE-256 hashes, so upstream depends on this package.
-It is forked in rather than taken as a dependency to keep it out of this module's dependency graph. Sources are
-unmodified apart from rewriting `github.com/decred/dcrd/crypto/blake256` to `github.com/go-webauthn/x/crypto/blake256`.
+It is forked in rather than taken as a dependency to keep it out of this module's dependency graph. Beyond the local
+fixes listed below, sources are unmodified apart from rewriting `github.com/decred/dcrd/crypto/blake256` to
+`github.com/go-webauthn/x/crypto/blake256`.
 
 The `internal/compress` and `internal/_asm` subpackages record their own bases above because upstream last modified them
 earlier than the parent. The leading underscore of `internal/_asm` means the Go tool ignores that directory entirely, so

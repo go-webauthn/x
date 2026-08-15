@@ -184,9 +184,9 @@ func (p *PublicKey) parse(serialized []byte) error {
 //
 // Hybrid:
 //
-//	<format byte = 0x05/0x06><32-byte X coordinate><32-byte Y coordinate>
+//	<format byte = 0x06/0x07><32-byte X coordinate><32-byte Y coordinate>
 //
-// NOTE: The hybrid format makes little sense in practice an therefore this
+// NOTE: The hybrid format makes little sense in practice and therefore this
 // package will not produce public keys serialized in this format.  However,
 // this function will properly parse them since they exist in the wild.
 func ParsePubKey(serialized []byte) (*PublicKey, error) {

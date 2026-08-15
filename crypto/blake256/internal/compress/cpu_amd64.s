@@ -9,7 +9,7 @@
 #include "textflag.h"
 
 // func supportsCPUID() bool
-TEXT ·supportsCPUID(SB), $8-4
+TEXT ·supportsCPUID(SB), $8-1
 	// Per the Intel 64 and IA-32 Architectures Software Developer's Manual,
 	// CPUID is supported if bit 21 of the EFLAGS register can be modified.
 	//

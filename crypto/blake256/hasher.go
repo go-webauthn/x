@@ -84,7 +84,7 @@ func (h *hasher) write(b []byte) (int, error) {
 
 	// When a partial block exists and adding the new data would meet or exceed
 	// the size of a block, fill up the partial block and compress it.
-	if h.nbuf > 0 && h.nbuf+uint32(len(b)) >= BlockSize {
+	if h.nbuf > 0 && uint64(h.nbuf)+uint64(len(b)) >= BlockSize {
 		written := uint32(copy(h.buf[h.nbuf:], b))
 		h.count += BlockSize << 3
 		compress.Blocks(&h.state, h.buf[:], h.count)
@@ -399,17 +399,31 @@ func (h *hasher) loadState(state []byte, requiredPrefix uint32) error {
 		return makeError(ErrMismatchedState, str)
 	}
 	offset += 4
-	for i := range h.state.CV {
-		h.state.CV[i] = binary.BigEndian.Uint32(state[offset:])
+
+	// Decode into a local value so that a malformed state is rejected without
+	// leaving the receiver partially overwritten.
+	var loaded hasher
+	for i := range loaded.state.CV {
+		loaded.state.CV[i] = binary.BigEndian.Uint32(state[offset:])
 		offset += 4
 	}
-	for i := range h.state.S {
-		h.state.S[i] = binary.BigEndian.Uint32(state[offset:])
+	for i := range loaded.state.S {
+		loaded.state.S[i] = binary.BigEndian.Uint32(state[offset:])
 		offset += 4
 	}
-	h.count = binary.BigEndian.Uint64(state[offset:])
+	loaded.count = binary.BigEndian.Uint64(state[offset:])
 	offset += 8
-	offset += uint32(copy(h.buf[:], state[offset:]))
-	h.nbuf = binary.BigEndian.Uint32(state[offset:])
+	offset += uint32(copy(loaded.buf[:], state[offset:]))
+	loaded.nbuf = binary.BigEndian.Uint32(state[offset:])
+
+	// The number of buffered bytes must be within the partial block buffer.
+	// Otherwise subsequent writes would index outside of it.
+	if loaded.nbuf >= BlockSize {
+		str := fmt.Sprintf("malformed intermediate state - buffered byte count "+
+			"%d is not less than %d", loaded.nbuf, BlockSize)
+		return makeError(ErrMalformedState, str)
+	}
+
+	*h = loaded
 	return nil
 }

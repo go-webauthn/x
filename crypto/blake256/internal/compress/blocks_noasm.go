@@ -21,5 +21,9 @@ package compress
 //
 // The chain value in the passed state is updated in place.
 func Blocks(state *State, msg []byte, counter uint64) {
+	if len(msg) < blockSize {
+		panic("blake256: message must be at least one full block")
+	}
+
 	blocksGeneric(state, msg, counter)
 }

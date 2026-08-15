@@ -22,6 +22,12 @@ package compress
 //
 // The chain value in the passed state is updated in place.
 func Blocks(state *State, msg []byte, counter uint64) {
+	// The assembly implementations do not bounds check, so enforce the
+	// documented minimum here to match the pure Go implementation.
+	if len(msg) < blockSize {
+		panic("blake256: message must be at least one full block")
+	}
+
 	switch {
 	case hasAVX:
 		blocksAVX(state, msg, counter)

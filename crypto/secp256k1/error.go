@@ -43,8 +43,8 @@ func (e ErrorKind) Error() string {
 }
 
 // Error identifies an error related to public key cryptography using a
-// sec256k1 curve. It has full support for [errors.Is] and [errors.As], so the
-// caller can  ascertain the specific reason for the error by checking
+// secp256k1 curve. It has full support for [errors.Is] and [errors.As], so the
+// caller can ascertain the specific reason for the error by checking
 // the underlying error.
 type Error struct {
 	Err         error
