@@ -129,6 +129,45 @@ var blockVecs = []blockVecTest{{
 		0xf5aa00dd, 0x1cb847e3, 0x140372af, 0x7b5c46b4,
 		0x888d82c8, 0xc0a91791, 0x3cfb5d04, 0x236a7cea,
 	},
+}, {
+	// The message and expected chain value are the padded final block and the
+	// resulting checksum of the "str7 (salted)" BLAKE-256 vector, which hashes
+	// an empty message with the salt "1234567890123456".
+	name: "salted empty message for BLAKE-256",
+	h: [8]uint32{
+		0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+		0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+	},
+	msg: hexTo64Bytes("80000000000000000000000000000000" +
+		"00000000000000000000000000000000" +
+		"00000000000000000000000000000000" +
+		"00000000000000010000000000000000"),
+	s:   [4]uint32{0x31323334, 0x35363738, 0x39303132, 0x33343536},
+	cnt: 0,
+	want: [8]uint32{
+		0x561d6d0c, 0xfa3d31d5, 0xeedaf2d5, 0x75f39425,
+		0x39b03522, 0xbefc2a11, 0x96ba0e51, 0xaf8992a8,
+	},
+}, {
+	// The message and expected chain value are the padded final block and the
+	// resulting checksum of the "str8 (salted)" BLAKE-256 vector, which hashes
+	// "It's so salty out there!" with the salt "SALTsaltSaltSALT".  Unlike the
+	// vector above, it also exercises a salt alongside a non-zero counter.
+	name: "salted one-block message for BLAKE-256",
+	h: [8]uint32{
+		0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+		0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+	},
+	msg: hexTo64Bytes("4974277320736f2073616c7479206f75" +
+		"74207468657265218000000000000000" +
+		"00000000000000000000000000000000" +
+		"000000000000000100000000000000c0"),
+	s:   [4]uint32{0x53414c54, 0x73616c74, 0x53616c74, 0x53414c54},
+	cnt: 192,
+	want: [8]uint32{
+		0x88cc1188, 0x9bbbee42, 0x095337fe, 0x2153c591,
+		0x971f94fb, 0xf8fe540d, 0x3c7e9f17, 0x00ab2d0c,
+	},
 }}
 
 // TestBlocks ensures the pure Go block compression function and whichever one

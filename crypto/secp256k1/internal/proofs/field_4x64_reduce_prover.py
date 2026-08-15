@@ -189,7 +189,7 @@ def prove_functional_congruence_lemmas():
         Concatenate the provided big-endian 64-bit limbs into a single
         CONGRUENCE_WIDTH-bit value:
 
-        limb0*2**(64*num_limbs) + limb1*2**(64*(num_limbs-1)) + ...
+        limb0*2**(64*(num_limbs-1)) + limb1*2**(64*(num_limbs-2)) + ...
         """
         return cwidth(Concat(*limbs))
 

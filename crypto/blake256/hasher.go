@@ -73,6 +73,17 @@ func (h *hasher) initializeSalt(salt []byte) {
 	h.state.S[3] = binary.BigEndian.Uint32(salt[12:])
 }
 
+// needsPartialBlockFlush returns whether an existing partial block of nbuf
+// bytes must be filled and compressed before buffering the n bytes of a new
+// write.
+//
+// The comparison is deliberately performed in 64-bit arithmetic.  Truncating
+// the write length to 32 bits wraps for writes of 4 GiB or more, which skips
+// the pending partial block and produces a wrong hash.
+func needsPartialBlockFlush(nbuf uint32, n int) bool {
+	return nbuf > 0 && uint64(nbuf)+uint64(n) >= BlockSize
+}
+
 // write adds the given bytes to the rolling hash.
 //
 // NOTE: This method only returns an error in order to satisfy the [io.Writer]
@@ -84,7 +95,7 @@ func (h *hasher) write(b []byte) (int, error) {
 
 	// When a partial block exists and adding the new data would meet or exceed
 	// the size of a block, fill up the partial block and compress it.
-	if h.nbuf > 0 && uint64(h.nbuf)+uint64(len(b)) >= BlockSize {
+	if needsPartialBlockFlush(h.nbuf, len(b)) {
 		written := uint32(copy(h.buf[h.nbuf:], b))
 		h.count += BlockSize << 3
 		compress.Blocks(&h.state, h.buf[:], h.count)

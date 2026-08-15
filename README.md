@@ -21,6 +21,11 @@ diffing the recorded commit against the upstream branch.
 Each commit base is the most recent upstream commit to touch that path as of the fork, so a base older than the fork
 itself simply means upstream had not modified those files since.
 
+Each section below ends with the `git log` command that lists the upstream changes since that base. The paths in those
+commands are upstream paths rather than paths in this repository, so each one must be run from a checkout of the
+upstream it targets: `decred/dcrd` for `dcrec/secp256k1` and `crypto/blake256`, `golang/go` for `src/encoding/asn1`,
+and `cloudflare/cfssl` for `revoke`.
+
 ### Local fixes to the dcrd forks
 
 These are the only changes to the `decred/dcrd` sources beyond the import path rewrites. They are not carried upstream,
@@ -29,11 +34,12 @@ two.
 
 | Location                                  | Change                                                                                                                             |
 |-------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
-| `blake256/hasher.go` `write`              | Compute the partial block guard in 64-bit arithmetic. A single write of 4 GiB truncated to `uint32`, skipped the pending block, and produced a wrong hash. |
+| `blake256/hasher.go` `write`              | Compute the partial block guard in 64-bit arithmetic. A single write of 4 GiB truncated to `uint32`, skipped the pending block, and produced a wrong hash. The guard is extracted to `needsPartialBlockFlush` so it can be tested without a 4 GiB write. |
 | `blake256/hasher.go` `loadState`          | Reject a serialized state whose buffered byte count is not less than `BlockSize`, and decode into a local value so a rejected state cannot partially overwrite the receiver. Previously such a state panicked on the next write. |
-| `blake256/internal/compress`              | Enforce the documented minimum message length in both `Blocks` implementations. The `amd64` assembly does not bounds check, so only the pure Go path panicked as documented. |
+| `blake256/internal/compress`              | Enforce the documented minimum message length in both `Blocks` implementations. The `amd64` assembly does not bounds check, so only the pure Go path panicked as documented. `blocksGeneric` itself returns without touching the chain value, so its comment now says the exported `Blocks` is what enforces the minimum. |
+| `blake256/internal/compress` test vectors | Add two salted `blockVecs` entries derived from the salted vectors in `hasher_test.go`. Without them no salt reaches the SSE2, SSE4.1, or AVX compression paths, since `TestBlocksAMD64` is the only test that forces each variant. |
 | `blake256/internal/compress/cpu_amd64.s`  | Declare `supportsCPUID` as `$8-1` rather than `$8-4`; a `bool` result is one byte, and `go vet` rejects the mismatch on `amd64`.     |
-| `secp256k1/doc.go`                        | Drop the references to the excluded `schnorr` subpackage and to per package `README.md` files, neither of which exist in this fork. |
+| `secp256k1/doc.go`                        | Drop the references to the excluded `schnorr` subpackage and to per-package `README.md` files, neither of which exist in this fork. |
 | `secp256k1/pubkey.go`                     | Document the hybrid format bytes as `0x06`/`0x07` to match `PubKeyFormatHybridEven` and `PubKeyFormatHybridOdd`; the comment said `0x05`/`0x06`. |
 | `secp256k1/error.go`                      | Spell the curve `secp256k1` in the `Error` doc comment.                                                                            |
 
@@ -83,7 +89,8 @@ git log --oneline 3e43f48cb6311c3c459f5c7aa69ae7d28b7fc821..master -- src/encodi
 
 ### revoke
 
-This package reached the repository in two hops, and neither recorded a commit at the time:
+This package reached the repository in two hops, neither of which recorded the commit of the source it was taken from.
+Both source commits below were therefore reconstructed after the fact:
 
 1. [github.com/go-webauthn/revoke](https://github.com/go-webauthn/revoke) (now archived) took a snapshot of
    `cloudflare/cfssl` in its initial commit `1edcf14` on 2022-04-04. The newest `cfssl` commit on `master` at that point

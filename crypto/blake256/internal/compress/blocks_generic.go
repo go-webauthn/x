@@ -53,7 +53,9 @@ func g(a, b, c, d, mx, my, cx, cy uint32) (uint32, uint32, uint32, uint32) {
 //	msg: the padded message to compress (must be at least 64 bytes)
 //	counter: the total number of message bits hashed so far
 //
-// It will panic if the provided message block does not have at least 64 bytes.
+// It returns without modifying the chain value when the provided message does
+// not have at least 64 bytes.  Callers must therefore enforce that minimum
+// themselves, as the exported [Blocks] does by panicking.
 //
 // The chain value in the provided state is updated in place.
 func blocksGeneric(state *State, msg []byte, counter uint64) {
