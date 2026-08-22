@@ -15,7 +15,7 @@ diffing the recorded commit against the upstream branch.
 | [crypto/blake256/internal/_asm](crypto/blake256/internal/_asm)         | [decred/dcrd](https://github.com/decred/dcrd) `crypto/blake256/internal/_asm`     | `0d2e94857b109d8bcf1056b3d5061ca90f0f8b94` | Module path rewrite only   |
 | [crypto/secp256k1](crypto/secp256k1)                                   | [decred/dcrd](https://github.com/decred/dcrd) `dcrec/secp256k1`                   | `085eb08c6b1e3aec6a201fd5ac45c64a2daf9144` | Import path rewrite; fixes |
 | [crypto/secp256k1/ecdsa](crypto/secp256k1/ecdsa)                       | [decred/dcrd](https://github.com/decred/dcrd) `dcrec/secp256k1/ecdsa`             | `085eb08c6b1e3aec6a201fd5ac45c64a2daf9144` | Import path rewrite only   |
-| [encoding/asn1](encoding/asn1)                                         | [golang/go](https://github.com/golang/go) `src/encoding/asn1`                     | `3e43f48cb6311c3c459f5c7aa69ae7d28b7fc821` | Substantial                |
+| [encoding/asn1](encoding/asn1)                                         | [golang/go](https://github.com/golang/go) `src/encoding/asn1`                     | `6a6d115f9a7422b2fa081ba6f567eefb4a099462` | Substantial                |
 | [revoke](revoke)                                                       | [cloudflare/cfssl](https://github.com/cloudflare/cfssl)                           | `e6502bb7ffe4ee576227c9123a101deda248884c` | Substantial                |
 
 Each commit base is the most recent upstream commit to touch that path as of the fork, so a base older than the fork
@@ -84,7 +84,7 @@ changes cannot be applied wholesale:
 - `ecdsa.go`, `ecdsa_test.go`, `marshal_opts.go`, and `unmarshal_opts.go` have no upstream counterpart.
 
 ```bash
-git log --oneline 3e43f48cb6311c3c459f5c7aa69ae7d28b7fc821..master -- src/encoding/asn1
+git log --oneline 6a6d115f9a7422b2fa081ba6f567eefb4a099462..master -- src/encoding/asn1
 ```
 
 ### revoke
