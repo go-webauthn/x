@@ -101,8 +101,11 @@ type Verifier struct {
 //
 // Whenever ok is false err describes why the status can't be determined.
 //
-// Each HTTP or HTTPS CRL distribution point is tried in order, and then each HTTP or HTTPS OCSP server, until one of
-// them gives an authenticated answer. A CRL is only used when it is signed by issuer, names issuer as its issuer, is
+// Every HTTP or HTTPS CRL distribution point is checked in order. The certificate is revoked as soon as the CRL of any
+// of them lists it, without the remaining ones being checked, and is only not revoked once all of them have been
+// checked, none of them list it, and at least one of them can be used. When none of the CRLs can be used, or there is
+// no supported CRL distribution point, each HTTP or HTTPS OCSP server is tried in order until one of them gives an
+// authenticated answer. A CRL is only used when it is signed by issuer, names issuer as its issuer, is
 // current and states when it will next be updated, is not a delta or indirect CRL, has no critical extension which is
 // not supported, and has a scope which covers cert. An OCSP response is only used when it identifies cert as issued
 // by issuer, is current, and is signed by issuer or by a responder certificate which issuer directly issued for OCSP
@@ -268,14 +271,27 @@ func (c *checker) check(ctx context.Context, cert *x509.Certificate, getIssuer i
 		return c.undetermined(err)
 	}
 
-	var errs []error
+	var (
+		errs     []error
+		complete bool
+	)
 
 	for _, uri := range crls {
-		if revoked, err = c.checkCRL(ctx, cert, issuer, uri); err == nil {
-			return revoked, true, nil
+		if revoked, err = c.checkCRL(ctx, cert, issuer, uri); err != nil {
+			errs = append(errs, err)
+
+			continue
 		}
 
-		errs = append(errs, err)
+		if revoked {
+			return true, true, nil
+		}
+
+		complete = true
+	}
+
+	if complete {
+		return false, true, nil
 	}
 
 	if len(servers) != 0 {

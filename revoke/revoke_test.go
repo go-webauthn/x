@@ -320,6 +320,97 @@ func TestVerifierVerifyCertificate(t *testing.T) {
 			ok:      true,
 		},
 		{
+			name: "ShouldRejectCertificateOnCRLOfLaterDistributionPoint",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				second := newTestServer(t)
+
+				cert = e.issue(t, withCRL(e.crl.URL, second.URL))
+				e.crl.set(newCRL(t, e.ca, e.caKey, nil, big.NewInt(1)))
+				second.set(newCRL(t, e.ca, e.caKey, nil, cert.SerialNumber))
+
+				return cert, e.ca
+			},
+			revoked: true,
+			ok:      true,
+		},
+		{
+			name: "ShouldRejectCertificateOnCRLOfLaterDistributionPointWhenEarlierUnavailable",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				second := newTestServer(t)
+
+				e.crl.status = http.StatusNotFound
+
+				cert = e.issue(t, withCRL(e.crl.URL, second.URL))
+				second.set(newCRL(t, e.ca, e.caKey, nil, cert.SerialNumber))
+
+				return cert, e.ca
+			},
+			revoked: true,
+			ok:      true,
+		},
+		{
+			name: "ShouldPermitCertificateNotOnCRLOfAnyDistributionPoint",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				second := newTestServer(t)
+
+				cert = e.issue(t, withCRL(e.crl.URL, second.URL))
+				e.crl.set(newCRL(t, e.ca, e.caKey, nil, big.NewInt(1)))
+				second.set(newCRL(t, e.ca, e.caKey, nil, big.NewInt(2)))
+
+				t.Cleanup(func() {
+					assert.Equal(t, int64(1), second.hits.Load())
+				})
+
+				return cert, e.ca
+			},
+			ok: true,
+		},
+		{
+			name: "ShouldPermitCertificateNotOnCRLWhenEarlierDistributionPointUnavailable",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				second := newTestServer(t)
+
+				e.crl.status = http.StatusNotFound
+
+				cert = e.issue(t, withCRL(e.crl.URL, second.URL))
+				second.set(newCRL(t, e.ca, e.caKey, nil))
+
+				t.Cleanup(func() {
+					assert.Equal(t, int64(1), second.hits.Load())
+				})
+
+				return cert, e.ca
+			},
+			ok: true,
+		},
+		{
+			name: "ShouldPermitCertificateNotOnCRLWhenLaterDistributionPointCanNotBeAuthenticated",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				second := newTestServer(t)
+
+				cert = e.issue(t, withCRL(e.crl.URL, second.URL))
+				e.crl.set(newCRL(t, e.ca, e.caKey, nil))
+				second.set(newCRL(t, e.attacker, e.attackerKey, nil, cert.SerialNumber))
+
+				return cert, e.ca
+			},
+			ok: true,
+		},
+		{
+			name: "ShouldNotDetermineStatusWhenNoDistributionPointCanBeAuthenticated",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				second := newTestServer(t)
+
+				e.crl.status = http.StatusNotFound
+
+				cert = e.issue(t, withCRL(e.crl.URL, second.URL))
+				second.set(newCRL(t, e.attacker, e.attackerKey, nil))
+
+				return cert, e.ca
+			},
+			err: ErrCRLInvalid,
+		},
+		{
 			name: "ShouldRejectOversizedCRL",
 			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
 				v.MaxCRLSize = 64
@@ -609,6 +700,22 @@ func TestVerifierVerifyCertificate(t *testing.T) {
 			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
 				cert = e.issue(t, withCRL(e.crl.URL), withOCSP(e.ocsp.URL))
 				e.crl.set(newCRL(t, e.attacker, e.attackerKey, nil))
+				e.ocsp.set(newOCSPResponse(t, e.ca, e.ca, e.caKey, cert, ocsp.Revoked, nil))
+
+				return cert, e.ca
+			},
+			revoked: true,
+			ok:      true,
+		},
+		{
+			name: "ShouldUseOCSPWhenNoDistributionPointCanBeUsed",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				second := newTestServer(t)
+
+				e.crl.status = http.StatusNotFound
+
+				cert = e.issue(t, withCRL(e.crl.URL, second.URL), withOCSP(e.ocsp.URL))
+				second.set(newCRL(t, e.attacker, e.attackerKey, nil))
 				e.ocsp.set(newOCSPResponse(t, e.ca, e.ca, e.caKey, cert, ocsp.Revoked, nil))
 
 				return cert, e.ca
