@@ -295,6 +295,47 @@ func TestVerifierVerifyCertificate(t *testing.T) {
 			err: ErrIssuerMismatch,
 		},
 		{
+			name: "ShouldNotDetermineStatusWithIssuerWhichCopiesSubjectKeyID",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				forged, forgedKey := newCA(t, "Test CA", func(template *x509.Certificate) {
+					template.SubjectKeyId = e.ca.SubjectKeyId
+				})
+
+				cert = e.issue(t, withCRL(e.crl.URL))
+				e.crl.set(newCRL(t, forged, forgedKey, nil))
+
+				return cert, forged
+			},
+			err: ErrIssuerMismatch,
+		},
+		{
+			name: "ShouldRejectCertificateOnCRLOfReissuedIssuerWithAnotherSubjectKeyID",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				issuer = reissueCA(t, e.ca, e.caKey)
+
+				cert = e.issue(t, withCRL(e.crl.URL))
+				e.crl.set(newCRL(t, issuer, e.caKey, nil, cert.SerialNumber))
+
+				require.NotEqual(t, cert.AuthorityKeyId, issuer.SubjectKeyId)
+
+				return cert, issuer
+			},
+			revoked: true,
+			ok:      true,
+		},
+		{
+			name: "ShouldPermitCertificateNotOnCRLOfReissuedIssuerWithAnotherSubjectKeyID",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				issuer = reissueCA(t, e.ca, e.caKey)
+
+				cert = e.issue(t, withCRL(e.crl.URL))
+				e.crl.set(newCRL(t, issuer, e.caKey, nil))
+
+				return cert, issuer
+			},
+			ok: true,
+		},
+		{
 			name: "ShouldPermitCertificateWithoutRevocationSources",
 			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
 				return e.issue(t), e.ca
@@ -841,6 +882,20 @@ func TestVerifyCertificateError(t *testing.T) {
 			ok:      true,
 		},
 		{
+			name: "ShouldRejectCertificateOnCRLOfDownloadedReissuedIssuerWithAnotherSubjectKeyID",
+			setup: func(t *testing.T, e *testEnv) (cert *x509.Certificate) {
+				issuer := reissueCA(t, e.ca, e.caKey)
+
+				cert = e.issue(t, withCRL(e.crl.URL), withIssuerURL(e.aia.URL))
+				e.aia.set(issuer.Raw)
+				e.crl.set(newCRL(t, issuer, e.caKey, nil, cert.SerialNumber))
+
+				return cert
+			},
+			revoked: true,
+			ok:      true,
+		},
+		{
 			name: "ShouldNotTrustCRLForgedByDownloadedIssuer",
 			setup: func(t *testing.T, e *testEnv) (cert *x509.Certificate) {
 				cert = e.issue(t, withCRL(e.crl.URL), withIssuerURL(e.aia.URL))
@@ -1223,6 +1278,29 @@ func newCertificate(t *testing.T, issuer *x509.Certificate, issuerKey *ecdsa.Pri
 	require.NoError(t, err)
 
 	return cert, key
+}
+
+func reissueCA(t *testing.T, ca *x509.Certificate, key *ecdsa.PrivateKey) *x509.Certificate {
+	t.Helper()
+
+	template := &x509.Certificate{
+		SerialNumber:          newSerial(),
+		RawSubject:            ca.RawSubject,
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		SubjectKeyId:          []byte{0x01, 0x02, 0x03, 0x04},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+
+	return cert
 }
 
 func newCRL(t *testing.T, issuer *x509.Certificate, issuerKey *ecdsa.PrivateKey, opt func(template *x509.RevocationList), revoked ...*big.Int) []byte {

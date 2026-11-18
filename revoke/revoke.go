@@ -400,10 +400,6 @@ func checkIssuer(cert, issuer *x509.Certificate) (err error) {
 		return fmt.Errorf("%w: the certificate issuer name does not match the issuer subject name", ErrIssuerMismatch)
 	}
 
-	if len(cert.AuthorityKeyId) != 0 && len(issuer.SubjectKeyId) != 0 && !bytes.Equal(cert.AuthorityKeyId, issuer.SubjectKeyId) {
-		return fmt.Errorf("%w: the certificate authority key id does not match the issuer subject key id", ErrIssuerMismatch)
-	}
-
 	if err = cert.CheckSignatureFrom(issuer); err != nil {
 		return fmt.Errorf("%w: %w", ErrIssuerMismatch, err)
 	}
