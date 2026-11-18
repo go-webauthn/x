@@ -106,7 +106,8 @@ type Verifier struct {
 // current and states when it will next be updated, is not a delta or indirect CRL, has no critical extension which is
 // not supported, and has a scope which covers cert. An OCSP response is only used when it identifies cert as issued
 // by issuer, is current, and is signed by issuer or by a responder certificate which issuer directly issued for OCSP
-// signing. A CRL or OCSP response which fails any of these checks never results in a not revoked answer.
+// signing. A CRL or OCSP response which fails any of these checks never results in a not revoked answer. A CRL which
+// is limited to some revocation reasons is only used to report a certificate it lists as revoked.
 //
 // A certificate which names neither a CRL distribution point nor an OCSP server has no revocation status to check and
 // is reported as not revoked with ok=true, even when HardFail is true. A certificate which only names sources that
