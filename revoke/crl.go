@@ -24,6 +24,9 @@ var (
 	oidExtensionCRLNumber                = asn1.ObjectIdentifier{2, 5, 29, 20}
 	oidExtensionDeltaCRLIndicator        = asn1.ObjectIdentifier{2, 5, 29, 27}
 	oidExtensionIssuingDistributionPoint = asn1.ObjectIdentifier{2, 5, 29, 28}
+	oidExtensionReasonCode               = asn1.ObjectIdentifier{2, 5, 29, 21}
+	oidExtensionInvalidityDate           = asn1.ObjectIdentifier{2, 5, 29, 24}
+	oidExtensionCertificateIssuer        = asn1.ObjectIdentifier{2, 5, 29, 29}
 )
 
 type crlKey struct {
@@ -100,6 +103,8 @@ func (c *checker) checkCRL(ctx context.Context, cert, issuer *x509.Certificate, 
 			return false, err
 		}
 
+		now = time.Now()
+
 		if err = verifyCRL(crl, issuer, now); err != nil {
 			return false, fmt.Errorf("%w from %q: %w", ErrCRLInvalid, uri, err)
 		}
@@ -151,7 +156,11 @@ func verifyCRL(crl *x509.RevocationList, issuer *x509.Certificate, now time.Time
 		return fmt.Errorf("not valid until %s", crl.ThisUpdate.Format(time.RFC3339))
 	}
 
-	if !crl.NextUpdate.IsZero() && !now.Before(crl.NextUpdate) {
+	if crl.NextUpdate.IsZero() {
+		return errors.New("the next update is not specified")
+	}
+
+	if !now.Before(crl.NextUpdate) {
 		return fmt.Errorf("expired at %s", crl.NextUpdate.Format(time.RFC3339))
 	}
 
@@ -164,6 +173,19 @@ func verifyCRL(crl *x509.RevocationList, issuer *x509.Certificate, now time.Time
 			continue
 		case ext.Critical:
 			return fmt.Errorf("unsupported critical extension %s", ext.Id)
+		}
+	}
+
+	for _, entry := range crl.RevokedCertificateEntries {
+		for _, ext := range entry.Extensions {
+			switch {
+			case ext.Id.Equal(oidExtensionCertificateIssuer):
+				return errors.New("indirect CRLs are not supported")
+			case ext.Id.Equal(oidExtensionReasonCode), ext.Id.Equal(oidExtensionInvalidityDate):
+				continue
+			case ext.Critical:
+				return fmt.Errorf("unsupported critical entry extension %s", ext.Id)
+			}
 		}
 	}
 

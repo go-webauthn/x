@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -111,6 +112,90 @@ func TestVerifierVerifyCertificate(t *testing.T) {
 			err: ErrCRLInvalid,
 		},
 		{
+			name: "ShouldNotTrustCRLWithoutNextUpdate",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withCRL(e.crl.URL))
+				e.crl.set(newUndatedCRL(t, e.ca, e.caKey))
+
+				return cert, e.ca
+			},
+			err: ErrCRLInvalid,
+		},
+		{
+			name: "ShouldUseOCSPWhenCRLHasNoNextUpdate",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withCRL(e.crl.URL), withOCSP(e.ocsp.URL))
+				e.crl.set(newUndatedCRL(t, e.ca, e.caKey))
+				e.ocsp.set(newOCSPResponse(t, e.ca, e.ca, e.caKey, cert, ocsp.Revoked, nil))
+
+				return cert, e.ca
+			},
+			revoked: true,
+			ok:      true,
+		},
+		{
+			name: "ShouldNotTrustCRLWhichExpiresWhileRetrieved",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				next := time.Now().Truncate(time.Second).Add(2 * time.Second)
+
+				cert = e.issue(t, withCRL(e.crl.URL))
+				e.crl.delay = time.Until(next) + 200*time.Millisecond
+				e.crl.set(newCRL(t, e.ca, e.caKey, func(template *x509.RevocationList) {
+					template.NextUpdate = next
+				}))
+
+				return cert, e.ca
+			},
+			err: ErrCRLInvalid,
+		},
+		{
+			name: "ShouldNotTrustCRLWithUnsupportedCriticalEntryExtension",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withCRL(e.crl.URL))
+				e.crl.set(newCRL(t, e.ca, e.caKey, func(template *x509.RevocationList) {
+					template.RevokedCertificateEntries[0].ExtraExtensions = []pkix.Extension{
+						{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 55555, 1}, Critical: true, Value: []byte{0x05, 0x00}},
+					}
+				}, big.NewInt(1)))
+
+				return cert, e.ca
+			},
+			err: ErrCRLInvalid,
+		},
+		{
+			name: "ShouldNotTrustCRLWithCertificateIssuerEntryExtension",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				value, err := asn1.Marshal([]asn1.RawValue{{Class: asn1.ClassContextSpecific, Tag: 4, IsCompound: true, Bytes: e.ca.RawSubject}})
+				require.NoError(t, err)
+
+				cert = e.issue(t, withCRL(e.crl.URL))
+				e.crl.set(newCRL(t, e.ca, e.caKey, func(template *x509.RevocationList) {
+					template.RevokedCertificateEntries[0].ExtraExtensions = []pkix.Extension{
+						{Id: oidExtensionCertificateIssuer, Critical: true, Value: value},
+					}
+				}, big.NewInt(1)))
+
+				return cert, e.ca
+			},
+			err: ErrCRLInvalid,
+		},
+		{
+			name: "ShouldRejectCertificateOnCRLWithSupportedEntryExtensions",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withCRL(e.crl.URL))
+				e.crl.set(newCRL(t, e.ca, e.caKey, func(template *x509.RevocationList) {
+					template.RevokedCertificateEntries[0].ReasonCode = 1
+					template.RevokedCertificateEntries[0].ExtraExtensions = []pkix.Extension{
+						{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 55555, 1}, Value: []byte{0x05, 0x00}},
+					}
+				}, cert.SerialNumber))
+
+				return cert, e.ca
+			},
+			revoked: true,
+			ok:      true,
+		},
+		{
 			name: "ShouldNotTrustDeltaCRL",
 			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
 				value, err := asn1.Marshal(1)
@@ -159,6 +244,26 @@ func TestVerifierVerifyCertificate(t *testing.T) {
 				return cert, e.ca
 			},
 			ok: true,
+		},
+		{
+			name: "ShouldPermitCRLScopedToUserCertificatesWithoutDistributionPoint",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withCRL(e.crl.URL))
+				e.crl.set(newCRL(t, e.ca, e.caKey, withRawScope([]byte{0x30, 0x03, 0x81, 0x01, 0xff})))
+
+				return cert, e.ca
+			},
+			ok: true,
+		},
+		{
+			name: "ShouldNotTrustCRLScopedToUserCertificatesWithoutDistributionPointForCA",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert, _ = newCertificate(t, e.ca, e.caKey, withCRL(e.crl.URL), withCA)
+				e.crl.set(newCRL(t, e.ca, e.caKey, withRawScope([]byte{0x30, 0x03, 0x81, 0x01, 0xff})))
+
+				return cert, e.ca
+			},
+			err: ErrCRLInvalid,
 		},
 		{
 			name: "ShouldNotDetermineStatusWhenCRLUnavailable",
@@ -343,6 +448,135 @@ func TestVerifierVerifyCertificate(t *testing.T) {
 					template.ThisUpdate = time.Now().Add(-2 * time.Hour)
 					template.NextUpdate = time.Now().Add(-time.Hour)
 				}))
+
+				return cert, e.ca
+			},
+			err: ErrOCSPInvalid,
+		},
+		{
+			name: "ShouldPermitFreshOCSPResponseWithoutNextUpdate",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withOCSP(e.ocsp.URL))
+				e.ocsp.set(newOCSPResponse(t, e.ca, e.ca, e.caKey, cert, ocsp.Good, func(template *ocsp.Response) {
+					template.NextUpdate = time.Time{}
+				}))
+
+				return cert, e.ca
+			},
+			ok: true,
+		},
+		{
+			name: "ShouldNotTrustStaleOCSPResponseWithoutNextUpdate",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withOCSP(e.ocsp.URL))
+				e.ocsp.set(newOCSPResponse(t, e.ca, e.ca, e.caKey, cert, ocsp.Good, func(template *ocsp.Response) {
+					template.ThisUpdate = time.Now().Add(-DefaultMaxOCSPAge - time.Hour)
+					template.NextUpdate = time.Time{}
+				}))
+
+				return cert, e.ca
+			},
+			err: ErrOCSPInvalid,
+		},
+		{
+			name: "ShouldNotTrustOCSPResponseWithoutNextUpdateOlderThanConfiguredAge",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				v.MaxOCSPAge = 30 * time.Minute
+
+				cert = e.issue(t, withOCSP(e.ocsp.URL))
+				e.ocsp.set(newOCSPResponse(t, e.ca, e.ca, e.caKey, cert, ocsp.Good, func(template *ocsp.Response) {
+					template.NextUpdate = time.Time{}
+				}))
+
+				return cert, e.ca
+			},
+			err: ErrOCSPInvalid,
+		},
+		{
+			name: "ShouldPermitOCSPResponseWithNextUpdateOlderThanConfiguredAge",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				v.MaxOCSPAge = 30 * time.Minute
+
+				cert = e.issue(t, withOCSP(e.ocsp.URL))
+				e.ocsp.set(newOCSPResponse(t, e.ca, e.ca, e.caKey, cert, ocsp.Good, nil))
+
+				return cert, e.ca
+			},
+			ok: true,
+		},
+		{
+			name: "ShouldNotTrustOCSPResponseForCertificateOfAnotherIssuer",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				other, _ := newCA(t, "Other CA")
+
+				// The response is signed by the issuer, but gives the status of the same serial number of another issuer.
+				cert = e.issue(t, withOCSP(e.ocsp.URL))
+				e.ocsp.set(newOCSPResponse(t, other, e.ca, e.caKey, cert, ocsp.Good, func(template *ocsp.Response) {
+					template.Certificate = nil
+				}))
+
+				return cert, e.ca
+			},
+			err: ErrOCSPInvalid,
+		},
+		{
+			name: "ShouldNotTrustOCSPResponseForCertificateOfIssuerWithSameName",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withOCSP(e.ocsp.URL))
+				e.ocsp.set(newOCSPResponse(t, e.attacker, e.ca, e.caKey, cert, ocsp.Good, func(template *ocsp.Response) {
+					template.Certificate = nil
+				}))
+
+				return cert, e.ca
+			},
+			err: ErrOCSPInvalid,
+		},
+		{
+			name: "ShouldPermitOCSPResponseWithEmbeddedSelfSignedIssuer",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withOCSP(e.ocsp.URL))
+				e.ocsp.set(newOCSPResponse(t, e.ca, e.ca, e.caKey, cert, ocsp.Good, func(template *ocsp.Response) {
+					template.Certificate = e.ca
+				}))
+
+				return cert, e.ca
+			},
+			ok: true,
+		},
+		{
+			name: "ShouldRejectCertificateWithOCSPResponseWithEmbeddedIntermediateIssuer",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				intermediate, intermediateKey := newCertificate(t, e.ca, e.caKey, withCA)
+
+				cert, _ = newCertificate(t, intermediate, intermediateKey, withOCSP(e.ocsp.URL))
+				e.ocsp.set(newOCSPResponse(t, intermediate, intermediate, intermediateKey, cert, ocsp.Revoked, func(template *ocsp.Response) {
+					template.Certificate = intermediate
+				}))
+
+				return cert, intermediate
+			},
+			revoked: true,
+			ok:      true,
+		},
+		{
+			name: "ShouldNotTrustOCSPResponseWithEmbeddedIssuerSignedByAnotherKey",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				intermediate, intermediateKey := newCertificate(t, e.ca, e.caKey, withCA)
+
+				cert, _ = newCertificate(t, intermediate, intermediateKey, withOCSP(e.ocsp.URL))
+				e.ocsp.set(newOCSPResponse(t, intermediate, intermediate, e.attackerKey, cert, ocsp.Good, func(template *ocsp.Response) {
+					template.Certificate = intermediate
+				}))
+
+				return cert, intermediate
+			},
+			err: ErrOCSPInvalid,
+		},
+		{
+			name: "ShouldNotTrustOCSPResponseWithoutEmbeddedCertificateSignedByAnotherKey",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withOCSP(e.ocsp.URL))
+				e.ocsp.set(newOCSPResponse(t, e.ca, e.ca, e.attackerKey, cert, ocsp.Good, nil))
 
 				return cert, e.ca
 			},
@@ -777,6 +1011,7 @@ func TestDefaults(t *testing.T) {
 	assert.Equal(t, DefaultTimeout, c.timeout)
 	assert.Equal(t, DefaultMaxCRLSize, c.maxCRL)
 	assert.Equal(t, DefaultMaxResponseSize, c.maxResponse)
+	assert.Equal(t, DefaultMaxOCSPAge, c.maxOCSPAge)
 }
 
 func TestErrorUnwrap(t *testing.T) {
@@ -800,6 +1035,7 @@ type testServer struct {
 	status  int
 	hang    bool
 	chunked bool
+	delay   time.Duration
 	hits    atomic.Int64
 }
 
@@ -839,6 +1075,14 @@ func newTestServer(t *testing.T) *testServer {
 			}
 
 			return
+		}
+
+		if s.delay > 0 {
+			select {
+			case <-time.After(s.delay):
+			case <-done:
+			case <-r.Context().Done():
+			}
 		}
 
 		s.mu.Lock()
@@ -901,6 +1145,17 @@ func withIssuerURL(uris ...string) func(template *x509.Certificate) {
 
 func withOCSPSigning(template *x509.Certificate) {
 	template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageOCSPSigning}
+}
+
+func withCA(template *x509.Certificate) {
+	template.IsCA = true
+	template.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
+}
+
+func withRawScope(value []byte) func(template *x509.RevocationList) {
+	return func(template *x509.RevocationList) {
+		template.ExtraExtensions = []pkix.Extension{{Id: oidExtensionIssuingDistributionPoint, Critical: true, Value: value}}
+	}
 }
 
 func withScope(t *testing.T, idp issuingDistributionPoint) func(template *x509.RevocationList) {
@@ -991,6 +1246,34 @@ func newCRL(t *testing.T, issuer *x509.Certificate, issuerKey *ecdsa.PrivateKey,
 	}
 
 	der, err := x509.CreateRevocationList(rand.Reader, template, issuer, issuerKey)
+	require.NoError(t, err)
+
+	return der
+}
+
+func newUndatedCRL(t *testing.T, issuer *x509.Certificate, issuerKey *ecdsa.PrivateKey) []byte {
+	t.Helper()
+
+	algorithm := pkix.AlgorithmIdentifier{Algorithm: asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 2}}
+
+	tbs, err := asn1.Marshal(struct {
+		Version    int
+		Signature  pkix.AlgorithmIdentifier
+		Issuer     asn1.RawValue
+		ThisUpdate time.Time
+	}{1, algorithm, asn1.RawValue{FullBytes: issuer.RawSubject}, time.Now().Add(-time.Hour).UTC()})
+	require.NoError(t, err)
+
+	digest := sha256.Sum256(tbs)
+
+	signature, err := ecdsa.SignASN1(rand.Reader, issuerKey, digest[:])
+	require.NoError(t, err)
+
+	der, err := asn1.Marshal(struct {
+		TBS       asn1.RawValue
+		Algorithm pkix.AlgorithmIdentifier
+		Signature asn1.BitString
+	}{asn1.RawValue{FullBytes: tbs}, algorithm, asn1.BitString{Bytes: signature, BitLength: len(signature) * 8}})
 	require.NoError(t, err)
 
 	return der

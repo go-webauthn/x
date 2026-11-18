@@ -26,6 +26,11 @@ const (
 	// DefaultMaxResponseSize is the largest issuer certificate or OCSP response body accepted when no other limit is
 	// configured.
 	DefaultMaxResponseSize int64 = 1 << 20
+
+	// DefaultMaxOCSPAge is the greatest age accepted for an OCSP response which does not state when it will next be
+	// updated when no other limit is configured. It is the longest validity interval the CA/Browser Forum Baseline
+	// Requirements permit for an OCSP response.
+	DefaultMaxOCSPAge = 10 * 24 * time.Hour
 )
 
 var (
@@ -71,6 +76,11 @@ type Verifier struct {
 	// MaxResponseSize is the largest OCSP response body accepted in bytes. Zero or less means DefaultMaxResponseSize.
 	MaxResponseSize int64
 
+	// MaxOCSPAge is the greatest age accepted for an OCSP response which does not state when it will next be updated.
+	// Zero or less means DefaultMaxOCSPAge. A response which does state when it will next be updated is used until
+	// that time regardless of this value.
+	MaxOCSPAge time.Duration
+
 	crls crlCache
 }
 
@@ -93,9 +103,10 @@ type Verifier struct {
 //
 // Each HTTP or HTTPS CRL distribution point is tried in order, and then each HTTP or HTTPS OCSP server, until one of
 // them gives an authenticated answer. A CRL is only used when it is signed by issuer, names issuer as its issuer, is
-// current, is not a delta or indirect CRL, and has a scope which covers cert. An OCSP response is only used when it
-// is current and is signed by issuer or by a responder certificate which issuer directly issued for OCSP signing. A
-// CRL or OCSP response which fails any of these checks never results in a not revoked answer.
+// current and states when it will next be updated, is not a delta or indirect CRL, has no critical extension which is
+// not supported, and has a scope which covers cert. An OCSP response is only used when it identifies cert as issued
+// by issuer, is current, and is signed by issuer or by a responder certificate which issuer directly issued for OCSP
+// signing. A CRL or OCSP response which fails any of these checks never results in a not revoked answer.
 //
 // A certificate which names neither a CRL distribution point nor an OCSP server has no revocation status to check and
 // is reported as not revoked with ok=true, even when HardFail is true. A certificate which only names sources that
@@ -118,6 +129,10 @@ func (v *Verifier) VerifyCertificate(ctx context.Context, cert, issuer *x509.Cer
 
 	if v.MaxResponseSize > 0 {
 		c.maxResponse = v.MaxResponseSize
+	}
+
+	if v.MaxOCSPAge > 0 {
+		c.maxOCSPAge = v.MaxOCSPAge
 	}
 
 	return c.check(ctx, cert, staticIssuer(issuer))
@@ -182,6 +197,7 @@ type checker struct {
 	timeout     time.Duration
 	maxCRL      int64
 	maxResponse int64
+	maxOCSPAge  time.Duration
 	crls        *crlCache
 }
 
@@ -196,6 +212,7 @@ func newChecker(client *http.Client, hardFail bool, crls *crlCache) *checker {
 		timeout:     DefaultTimeout,
 		maxCRL:      DefaultMaxCRLSize,
 		maxResponse: DefaultMaxResponseSize,
+		maxOCSPAge:  DefaultMaxOCSPAge,
 		crls:        crls,
 	}
 }
