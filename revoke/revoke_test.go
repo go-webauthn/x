@@ -266,6 +266,48 @@ func TestVerifierVerifyCertificate(t *testing.T) {
 			err: ErrCRLInvalid,
 		},
 		{
+			name: "ShouldRejectCertificateOnCRLScopedToSomeReasons",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withCRL(e.crl.URL))
+				e.crl.set(newCRL(t, e.ca, e.caKey, withScope(t, issuingDistributionPoint{OnlySomeReasons: keyCompromiseOnly}), cert.SerialNumber))
+
+				return cert, e.ca
+			},
+			revoked: true,
+			ok:      true,
+		},
+		{
+			name: "ShouldNotDetermineStatusWhenNotOnCRLScopedToSomeReasons",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withCRL(e.crl.URL))
+				e.crl.set(newCRL(t, e.ca, e.caKey, withScope(t, issuingDistributionPoint{OnlySomeReasons: keyCompromiseOnly}), big.NewInt(1)))
+
+				return cert, e.ca
+			},
+			err: ErrCRLInvalid,
+		},
+		{
+			name: "ShouldUseOCSPWhenNotOnCRLScopedToSomeReasons",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withCRL(e.crl.URL), withOCSP(e.ocsp.URL))
+				e.crl.set(newCRL(t, e.ca, e.caKey, withScope(t, issuingDistributionPoint{OnlySomeReasons: keyCompromiseOnly})))
+				e.ocsp.set(newOCSPResponse(t, e.ca, e.ca, e.caKey, cert, ocsp.Good, nil))
+
+				return cert, e.ca
+			},
+			ok: true,
+		},
+		{
+			name: "ShouldNotTrustCRLScopedToSomeReasonsAndCACertificates",
+			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
+				cert = e.issue(t, withCRL(e.crl.URL))
+				e.crl.set(newCRL(t, e.ca, e.caKey, withScope(t, issuingDistributionPoint{OnlyContainsCACerts: true, OnlySomeReasons: keyCompromiseOnly}), cert.SerialNumber))
+
+				return cert, e.ca
+			},
+			err: ErrCRLInvalid,
+		},
+		{
 			name: "ShouldNotDetermineStatusWhenCRLUnavailable",
 			setup: func(t *testing.T, e *testEnv, v *Verifier) (cert, issuer *x509.Certificate) {
 				e.crl.status = http.StatusNotFound
@@ -1168,6 +1210,8 @@ func withScope(t *testing.T, idp issuingDistributionPoint) func(template *x509.R
 		template.ExtraExtensions = []pkix.Extension{{Id: oidExtensionIssuingDistributionPoint, Critical: true, Value: value}}
 	}
 }
+
+var keyCompromiseOnly = asn1.BitString{Bytes: []byte{0x40}, BitLength: 2}
 
 func uriName(uri string) asn1.RawValue {
 	return asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 6, Bytes: []byte(uri)}

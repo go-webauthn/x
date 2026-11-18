@@ -112,7 +112,9 @@ func (c *checker) checkCRL(ctx context.Context, cert, issuer *x509.Certificate, 
 		c.crls.put(key, crl, now)
 	}
 
-	if err = verifyCRLScope(crl, cert); err != nil {
+	var limited bool
+
+	if limited, err = verifyCRLScope(crl, cert); err != nil {
 		return false, fmt.Errorf("%w from %q: %w", ErrCRLInvalid, uri, err)
 	}
 
@@ -120,6 +122,10 @@ func (c *checker) checkCRL(ctx context.Context, cert, issuer *x509.Certificate, 
 		if cert.SerialNumber.Cmp(entry.SerialNumber) == 0 {
 			return true, nil
 		}
+	}
+
+	if limited {
+		return false, fmt.Errorf("%w from %q: the scope is limited to some revocation reasons", ErrCRLInvalid, uri)
 	}
 
 	return false, nil
@@ -192,7 +198,7 @@ func verifyCRL(crl *x509.RevocationList, issuer *x509.Certificate, now time.Time
 	return nil
 }
 
-func verifyCRLScope(crl *x509.RevocationList, cert *x509.Certificate) (err error) {
+func verifyCRLScope(crl *x509.RevocationList, cert *x509.Certificate) (limited bool, err error) {
 	for _, ext := range crl.Extensions {
 		if !ext.Id.Equal(oidExtensionIssuingDistributionPoint) {
 			continue
@@ -204,24 +210,26 @@ func verifyCRLScope(crl *x509.RevocationList, cert *x509.Certificate) (err error
 		)
 
 		if rest, err = asn1.Unmarshal(ext.Value, &idp); err != nil {
-			return fmt.Errorf("invalid issuing distribution point: %w", err)
+			return false, fmt.Errorf("invalid issuing distribution point: %w", err)
 		} else if len(rest) != 0 {
-			return errors.New("invalid issuing distribution point: trailing data")
+			return false, errors.New("invalid issuing distribution point: trailing data")
 		}
 
 		switch {
 		case idp.IndirectCRL:
-			return errors.New("indirect CRLs are not supported")
+			return false, errors.New("indirect CRLs are not supported")
 		case idp.OnlyContainsAttributeCerts:
-			return errors.New("the scope is limited to attribute certificates")
-		case idp.OnlySomeReasons.BitLength != 0:
-			return errors.New("the scope is limited to some revocation reasons")
+			return false, errors.New("the scope is limited to attribute certificates")
 		case idp.OnlyContainsUserCerts && cert.IsCA:
-			return errors.New("the scope is limited to end entity certificates")
+			return false, errors.New("the scope is limited to end entity certificates")
 		case idp.OnlyContainsCACerts && !cert.IsCA:
-			return errors.New("the scope is limited to CA certificates")
+			return false, errors.New("the scope is limited to CA certificates")
 		case len(idp.DistributionPoint.RelativeName) != 0:
-			return errors.New("relative distribution point names are not supported")
+			return false, errors.New("relative distribution point names are not supported")
+		}
+
+		if idp.OnlySomeReasons.BitLength != 0 {
+			limited = true
 		}
 
 		if len(idp.DistributionPoint.FullName) == 0 {
@@ -231,9 +239,9 @@ func verifyCRLScope(crl *x509.RevocationList, cert *x509.Certificate) (err error
 		if !slices.ContainsFunc(idp.DistributionPoint.FullName, func(name asn1.RawValue) bool {
 			return name.Class == asn1.ClassContextSpecific && name.Tag == 6 && slices.Contains(cert.CRLDistributionPoints, string(name.Bytes))
 		}) {
-			return errors.New("the distribution point does not match any distribution point of the certificate")
+			return false, errors.New("the distribution point does not match any distribution point of the certificate")
 		}
 	}
 
-	return nil
+	return limited, nil
 }
